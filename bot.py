@@ -31,6 +31,7 @@ INITIAL_COGS = [
     "cogs.shop",
     "cogs.profile",
     "cogs.admin",
+    "cogs.codex",
 ]
 
 

@@ -1005,6 +1005,50 @@ class Database:
             "SELECT user_id, COUNT(*) AS v FROM user_badges "
             "GROUP BY user_id ORDER BY v DESC LIMIT ?", limit)
 
+    # ---- 全体統計（社長用の /codex 資料室） -------------------------------
+    async def species_owner_counts(self) -> dict[str, tuple[int, int]]:
+        """種族ID -> (所持している人数, 総個体数)。図鑑の全体到達度の把握用。"""
+        async with self.conn.execute(
+            "SELECT species_id, COUNT(DISTINCT user_id) AS owners, COUNT(*) AS total "
+            "FROM user_creatures GROUP BY species_id"
+        ) as cur:
+            return {r["species_id"]: (r["owners"], r["total"]) for r in await cur.fetchall()}
+
+    async def badge_owner_counts(self) -> dict[str, int]:
+        """バッジID -> 獲得した人数。"""
+        async with self.conn.execute(
+            "SELECT badge_id, COUNT(*) AS c FROM user_badges GROUP BY badge_id"
+        ) as cur:
+            return {r["badge_id"]: r["c"] for r in await cur.fetchall()}
+
+    async def item_totals(self) -> dict[str, int]:
+        """アイテムID -> 全ユーザーの保有総数。"""
+        async with self.conn.execute(
+            "SELECT item_id, COALESCE(SUM(qty),0) AS s FROM user_items "
+            "WHERE qty > 0 GROUP BY item_id"
+        ) as cur:
+            return {r["item_id"]: r["s"] for r in await cur.fetchall()}
+
+    async def global_counters(self) -> dict:
+        """全体のアクション累計（探索・手なずけ・合体・逃がす）と最大深度。"""
+        async with self.conn.execute(
+            "SELECT COALESCE(SUM(explores),0) AS explores, COALESCE(SUM(tames),0) AS tames, "
+            "COALESCE(SUM(merges),0) AS merges, COALESCE(SUM(releases),0) AS releases, "
+            "COALESCE(MAX(max_depth),0) AS max_depth FROM user_stats"
+        ) as cur:
+            return dict(await cur.fetchone())
+
+    async def quest_claim_counts(self) -> dict[str, int]:
+        """クエストID -> 受取済み回数（transactions の reason から集計）。"""
+        async with self.conn.execute(
+            "SELECT reason, COUNT(*) AS c FROM transactions "
+            "WHERE reason LIKE 'quest:%' OR reason LIKE 'daily:%' GROUP BY reason"
+        ) as cur:
+            out: dict[str, int] = {}
+            for r in await cur.fetchall():
+                out[r["reason"].split(":", 1)[1]] = out.get(r["reason"].split(":", 1)[1], 0) + r["c"]
+            return out
+
     async def withdrawable(self, user_id: int) -> int:
         """このユーザーが換金できる上限枠 = Σ入金 − Σ換金gross。
 

@@ -780,7 +780,10 @@ class Collection(commands.Cog):
         # マイルストーン受取可能ならボタン付き（本人操作）
         owned_normal = await self.db.distinct_species_count(uid)
         claimed = await self.db.claimed_milestones(uid)
-        view = DexClaimView(self, uid) if self._has_claimable_milestone(owned_normal, claimed) else None
+        # view=None は discord.py が受け付けない（MISSING を使う）
+        view = (DexClaimView(self, uid)
+                if self._has_claimable_milestone(owned_normal, claimed)
+                else discord.utils.MISSING)
         # 図鑑は公開（みんなに見える）
         await interaction.response.send_message(embed=embed, view=view)
 

@@ -161,7 +161,8 @@ class Shop(commands.Cog):
             value = it["desc"] + (f"\n使い方: {use}" if use else "")
             embed.add_field(name=f"{it['name']} — {price_label(it)}", value=value, inline=False)
         embed.set_footer(text=f"所持: {bal.coins:,} リリー ・ {bal.gems:,} ジェム")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        # 品揃えは公開（他の人にも見える）
+        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="buy", description="商品を選んで購入します")
     @app_commands.rename(item="商品", quantity="数量")

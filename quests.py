@@ -24,10 +24,29 @@ RESET_HOUR = 7
 NORMAL_SLOTS = 3   # 通常クエストの枠数
 DAILY_SLOTS = 3    # デイリークエストの枠数
 
-# アイテムの価値（報酬計算・total_value 用）。ジェムは配らない＝ここに載る物のみ。
+# ジェム1個のリリー建て価値。報酬の過剰配布を防ぐため、実売価より高めに見積もる。
+GEM_VALUE_COINS = 200
+
+# アイテムの価値（報酬計算・total_value 用）。ショップの実売価と一致させること。
+# ジェム建ての商品は GEM_VALUE_COINS 換算（＝タダで配る量を絞る）。
 REWARD_ITEM_VALUE = {
-    "bait": 200, "charm": 600, "gold_bait": 400,
-    "limited_ticket": 1000, "reroll_ticket": 800, "name_tag": 300,
+    "bait": 200,                             # ショップ 200 リリー
+    "charm": 600,                            # ショップ 600 リリー
+    "name_tag": 300,                         # ショップ 300 リリー
+    "reroll_ticket": 400,                    # ショップ 400 リリー
+    "gold_bait": 2 * GEM_VALUE_COINS,        # ショップ 2 ジェム
+    "limited_ticket": 5 * GEM_VALUE_COINS,   # ショップ 5 ジェム
+}
+
+# 1クエストで配れる個数の上限。価値が高い・希少なものほど少なく。
+# これが無いと目標回数に比例して「なまえ札×40」のような非現実的な数量になる。
+REWARD_ITEM_MAX_QTY = {
+    "bait": 5,             # 消耗品・安価
+    "charm": 3,
+    "name_tag": 2,
+    "reroll_ticket": 2,
+    "gold_bait": 2,        # ジェム建て
+    "limited_ticket": 1,   # ジェム建ての最上位。1個までの特別枠
 }
 
 # 1回(1アクション)あたりの報酬リリー。各イベントの「最低消費/回」より必ず小さい
@@ -54,15 +73,17 @@ DESC_FMT = {
 
 @dataclass(frozen=True)
 class Reward:
+    """クエスト報酬。リリーコインとアイテム（複数種可）の組み合わせ。
+
+    items は ((アイテムID, 個数), ...)。「餌×3 と なつき薬×1 と 1,200リリー」のように
+    複数を組み合わせられる。
+    """
     coins: int
-    item_id: str | None = None
-    item_qty: int = 0
+    items: tuple[tuple[str, int], ...] = ()
 
     @property
     def item_value(self) -> int:
-        if not self.item_id:
-            return 0
-        return REWARD_ITEM_VALUE.get(self.item_id, 0) * self.item_qty
+        return sum(REWARD_ITEM_VALUE.get(iid, 0) * qty for iid, qty in self.items)
 
     @property
     def total_value(self) -> int:
@@ -76,7 +97,7 @@ class QuestTemplate:
     title: str
     tier: str           # 難易度（やさしい/ふつう/むずかしい）
     kind: str           # 'daily' | 'normal'
-    item: str | None = None   # 設定時は報酬がこのアイテム（それ以外はリリー）
+    items: tuple[str, ...] = ()   # 報酬アイテム（先頭から優先配分・残りはリリー）
 
 
 @dataclass(frozen=True)
@@ -92,14 +113,25 @@ class QuestDef:
     difficulty: str = ""
 
 
-def reward_for(event: str, target: int, item: str | None) -> Reward:
-    """目標回数に比例した報酬。item指定時はアイテム、なければリリー。"""
+def reward_for(event: str, target: int, items: tuple[str, ...]) -> Reward:
+    """目標回数に比例した価値(base)を、アイテム（個数上限つき）と残りリリーに配分する。
+
+    アイテムは REWARD_ITEM_MAX_QTY を超えて配らない。上限で余った価値はリリーで支払う
+    ので、報酬の総価値は base のままブレない（＝「消費 > 報酬」の不変条件を維持）。
+    """
     base = target * REWARD_PER_ACTION[event]
-    if item:
-        unit = REWARD_ITEM_VALUE[item]
-        qty = max(1, base // unit)   # 切り捨て → 価値は base 以下 → 常に消費未満
-        return Reward(0, item, qty)
-    return Reward(base)
+    granted: list[tuple[str, int]] = []
+    remaining = base
+    for iid in items:
+        unit = REWARD_ITEM_VALUE[iid]
+        qty = min(REWARD_ITEM_MAX_QTY[iid], remaining // unit)
+        if qty > 0:
+            granted.append((iid, qty))
+            remaining -= unit * qty
+    if not granted:
+        # 目標が小さくアイテム1個分の価値にも満たない → 全額リリーで支払う
+        return Reward(base)
+    return Reward(remaining, tuple(granted))
 
 
 def _tiers_for(kind: str) -> dict:
@@ -112,7 +144,7 @@ def quest_from(tid: str, target: int) -> QuestDef | None:
     if t is None:
         return None
     return QuestDef(tid, t.title, DESC_FMT[t.event].format(n=target), t.event,
-                    target, reward_for(t.event, target, t.item), t.kind, t.tier)
+                    target, reward_for(t.event, target, t.items), t.kind, t.tier)
 
 
 def _roll_target(t: QuestTemplate, rng: random.Random) -> int:
@@ -162,67 +194,78 @@ _DAILY_SPEC = [
     ("tame_success", "テイム", "ふつう", None),
 ]
 
+# 難易度が上がるほど「アイテム＋リリー」の複合報酬になる。探索系は餌、手なずけ系は
+# なつき薬…とテーマを合わせ、最上位だけジェム建ての品（金の餌・限定チケット）を1個。
 _NORMAL_SPEC = [
     # explore（18）
     ("explore", "探索行", "やさしい", None),
     ("explore", "野外調査", "やさしい", None),
     ("explore", "地図を埋めて", "やさしい", "bait"),
     ("explore", "漫遊", "やさしい", None),
-    ("explore", "踏査", "やさしい", None),
-    ("explore", "遠征", "ふつう", None),
-    ("explore", "探検", "ふつう", None),
+    ("explore", "踏査", "やさしい", "bait"),
+    ("explore", "遠征", "ふつう", "bait"),
+    ("explore", "探検", "ふつう", ("bait", "charm")),
     ("explore", "縦断の旅", "ふつう", None),
     ("explore", "跋渉", "ふつう", "reroll_ticket"),
-    ("explore", "踏破", "ふつう", None),
-    ("explore", "秘境へ", "ふつう", None),
-    ("explore", "大遠征", "むずかしい", None),
-    ("explore", "未踏の地", "むずかしい", None),
-    ("explore", "大踏破", "むずかしい", "gold_bait"),
-    ("explore", "極地探索", "むずかしい", None),
-    ("explore", "果てなき道", "むずかしい", None),
-    ("explore", "世界の果て", "むずかしい", "limited_ticket"),
-    ("explore", "探究者", "むずかしい", None),
+    ("explore", "踏破", "ふつう", ("gold_bait", "bait")),
+    ("explore", "秘境へ", "ふつう", ("charm", "bait")),
+    ("explore", "大遠征", "むずかしい", ("gold_bait", "bait")),
+    ("explore", "未踏の地", "むずかしい", ("bait", "charm")),
+    ("explore", "大踏破", "むずかしい", ("gold_bait", "bait")),
+    ("explore", "極地探索", "むずかしい", ("gold_bait", "charm")),
+    ("explore", "果てなき道", "むずかしい", ("bait", "charm")),
+    ("explore", "世界の果て", "むずかしい", ("limited_ticket", "charm")),
+    ("explore", "探究者", "むずかしい", ("reroll_ticket", "bait")),
     # encounter（16）
     ("encounter", "観察", "やさしい", None),
-    ("encounter", "発見の喜び", "やさしい", None),
+    ("encounter", "発見の喜び", "やさしい", "bait"),
     ("encounter", "目撃", "やさしい", "bait"),
     ("encounter", "探し物", "やさしい", None),
-    ("encounter", "観測", "ふつう", None),
-    ("encounter", "尾行", "ふつう", None),
-    ("encounter", "追跡調査", "ふつう", None),
+    ("encounter", "観測", "ふつう", "bait"),
+    ("encounter", "尾行", "ふつう", ("charm", "bait")),
+    ("encounter", "追跡調査", "ふつう", ("bait", "charm")),
     ("encounter", "生き物図鑑", "ふつう", "charm"),
-    ("encounter", "まなざし", "ふつう", None),
-    ("encounter", "記録者", "ふつう", None),
-    ("encounter", "大観察", "むずかしい", None),
-    ("encounter", "たくさんの出会い", "むずかしい", None),
-    ("encounter", "観察の達人", "むずかしい", "reroll_ticket"),
-    ("encounter", "見晴らし", "むずかしい", None),
-    ("encounter", "遭遇録", "むずかしい", None),
-    ("encounter", "生態の探究", "むずかしい", "name_tag"),
+    ("encounter", "まなざし", "ふつう", "name_tag"),
+    ("encounter", "記録者", "ふつう", ("charm", "bait")),
+    ("encounter", "大観察", "むずかしい", ("charm", "bait")),
+    ("encounter", "たくさんの出会い", "むずかしい", ("bait", "charm")),
+    ("encounter", "観察の達人", "むずかしい", ("reroll_ticket", "bait")),
+    ("encounter", "見晴らし", "むずかしい", ("name_tag", "bait")),
+    ("encounter", "遭遇録", "むずかしい", ("charm", "bait")),
+    ("encounter", "生態の探究", "むずかしい", ("name_tag", "charm")),
     # tame_success（16）
     ("tame_success", "手なずけ", "やさしい", None),
-    ("tame_success", "なかよし作戦", "やさしい", None),
+    ("tame_success", "なかよし作戦", "やさしい", "charm"),
     ("tame_success", "信頼を得る", "やさしい", "bait"),
     ("tame_success", "相棒集め", "やさしい", None),
-    ("tame_success", "調教", "ふつう", None),
-    ("tame_success", "手練", "ふつう", None),
-    ("tame_success", "絆", "ふつう", None),
-    ("tame_success", "心の絆", "ふつう", "charm"),
-    ("tame_success", "仲間集め", "ふつう", None),
-    ("tame_success", "信頼の輪", "ふつう", None),
-    ("tame_success", "熟練の調教", "むずかしい", None),
-    ("tame_success", "名テイマー", "むずかしい", None),
-    ("tame_success", "超調教", "むずかしい", "reroll_ticket"),
-    ("tame_success", "手なずけ名人", "むずかしい", None),
-    ("tame_success", "絆の証", "むずかしい", None),
-    ("tame_success", "テイマーの道", "むずかしい", "limited_ticket"),
+    ("tame_success", "調教", "ふつう", "charm"),
+    ("tame_success", "手練", "ふつう", ("charm", "bait")),
+    ("tame_success", "絆", "ふつう", "charm"),
+    ("tame_success", "心の絆", "ふつう", ("charm", "bait")),
+    ("tame_success", "仲間集め", "ふつう", ("charm", "bait")),
+    ("tame_success", "信頼の輪", "ふつう", "name_tag"),
+    ("tame_success", "熟練の調教", "むずかしい", ("charm", "bait")),
+    ("tame_success", "名テイマー", "むずかしい", ("reroll_ticket", "charm")),
+    ("tame_success", "超調教", "むずかしい", ("reroll_ticket", "charm")),
+    ("tame_success", "手なずけ名人", "むずかしい", ("charm", "bait")),
+    ("tame_success", "絆の証", "むずかしい", ("name_tag", "charm")),
+    ("tame_success", "テイマーの道", "むずかしい", ("limited_ticket", "charm")),
 ]
 
 
 def _build(kind: str, spec: list) -> list[QuestTemplate]:
+    """spec の item は None / "アイテムID" / ("ID1", "ID2") のいずれでも書ける。"""
     p = kind[0]
-    return [QuestTemplate(f"{p}{i:02d}", ev, title, tier, kind, item)
-            for i, (ev, title, tier, item) in enumerate(spec)]
+    out = []
+    for i, (ev, title, tier, item) in enumerate(spec):
+        if item is None:
+            items: tuple[str, ...] = ()
+        elif isinstance(item, str):
+            items = (item,)
+        else:
+            items = tuple(item)
+        out.append(QuestTemplate(f"{p}{i:02d}", ev, title, tier, kind, items))
+    return out
 
 
 DAILY_TEMPLATES: list[QuestTemplate] = _build("daily", _DAILY_SPEC)

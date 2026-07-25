@@ -169,7 +169,7 @@ class Admin(commands.Cog):
         else:
             embed.add_field(name="一覧", value="未処理の申請はありません。", inline=False)
 
-        view = None
+        view = discord.utils.MISSING  # view=None は discord.py が受け付けない
         if reqs and self.bot.cfg.payout_enabled:
             view = PayoutQueueView(self, interaction.user.id)
         elif reqs and not self.bot.cfg.payout_enabled:

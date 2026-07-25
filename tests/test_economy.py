@@ -89,8 +89,43 @@ def test_reward_coin_ratio_about_80_percent():
 def test_quests_never_award_gems():
     # ジェムは課金通貨。クエスト報酬で無料配布しない（extraはアイテムのみ）。
     for q in _rep_quests():
-        if q.reward.item_id:
-            assert q.reward.item_id in quests.REWARD_ITEM_VALUE
+        for iid, _ in q.reward.items:
+            assert iid in quests.REWARD_ITEM_VALUE
+
+
+def test_reward_item_qty_is_reasonable():
+    """報酬アイテムの個数が現実的な範囲に収まること（なまえ札×40 のような暴走を防ぐ）。"""
+    for q in _rep_quests():
+        for iid, qty in q.reward.items:
+            cap = quests.REWARD_ITEM_MAX_QTY[iid]
+            assert 1 <= qty <= cap, (q.quest_id, q.target, iid, qty, cap)
+            assert qty <= 5, f"{q.quest_id}: {iid}×{qty} は多すぎる"
+
+
+def test_reward_item_value_matches_shop_price():
+    """報酬計算に使うアイテム価値がショップの実売価と一致すること。
+
+    ずれていると、安く売っている物を高く見積もって配布量が不当に増減する。
+    """
+    from cogs.shop import SHOP_ITEMS
+
+    for iid, value in quests.REWARD_ITEM_VALUE.items():
+        it = SHOP_ITEMS[iid]
+        expected = (it["price_gems"] * quests.GEM_VALUE_COINS
+                    if it["price_gems"] else it["price_coins"])
+        assert value == expected, (iid, value, expected)
+
+
+def test_hard_quests_give_multiple_reward_kinds():
+    """むずかしいクエストは「アイテム＋リリー」など複数種の報酬になること。"""
+    hard_with_items = [
+        q for q in _rep_quests()
+        if q.difficulty == "むずかしい" and q.reward.items
+    ]
+    assert hard_with_items, "アイテム報酬のあるむずかしいクエストが無い"
+    for q in hard_with_items:
+        kinds = len(q.reward.items) + (1 if q.reward.coins else 0)
+        assert kinds >= 2, (q.quest_id, q.reward)
 
 
 # ---- 出金手数料（ハウスエッジ） ---------------------------------------------

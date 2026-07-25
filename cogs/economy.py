@@ -174,13 +174,16 @@ class Economy(commands.Cog):
 
     # ---- helpers ----------------------------------------------------------
     def _reward_text(self, r) -> str:
-        # 報酬は「リリー」か「アイテム」のどちらか一方
-        if r.item_id and r.item_qty:
-            from cogs.shop import SHOP_ITEMS
-            name = SHOP_ITEMS.get(r.item_id, {}).get("name", r.item_id)
-            base = f"{name}×{r.item_qty}"
-            return f"{r.coins:,} リリー + {base}" if r.coins else base
-        return f"{r.coins:,} リリー"
+        """報酬の表示（例:「1,200 リリー ＋ 🍖 餌×3 ＋ 🧪 なつき薬×1」）。"""
+        from cogs.shop import SHOP_ITEMS
+
+        parts = []
+        if r.coins:
+            parts.append(f"{r.coins:,} リリー")
+        for iid, qty in r.items:
+            name = SHOP_ITEMS.get(iid, {}).get("name", iid)
+            parts.append(f"{name}×{qty}")
+        return " ＋ ".join(parts) if parts else "0 リリー"
 
     async def claim_completed(self, user_id: int) -> tuple[int, int]:
         """デイリー(period)＋通常(枠)の達成済みをすべて受け取る。(合計コイン, 件数)。"""
@@ -205,9 +208,10 @@ class Economy(commands.Cog):
         return gained, count
 
     async def _grant_reward(self, user_id: int, q, reason: str) -> None:
-        await self.db.add_coins(user_id, q.reward.coins, reason=reason)
-        if q.reward.item_id and q.reward.item_qty:
-            await self.db.add_item(user_id, q.reward.item_id, q.reward.item_qty)
+        if q.reward.coins:
+            await self.db.add_coins(user_id, q.reward.coins, reason=reason)
+        for iid, qty in q.reward.items:
+            await self.db.add_item(user_id, iid, qty)
 
     async def reroll_cost_preview(self, user_id: int) -> str:
         """次のリロールにかかるコストの説明（消費はしない）。確認画面で表示する。"""
@@ -315,6 +319,7 @@ class Economy(commands.Cog):
             for c in self.bot.tree.walk_commands()
             if isinstance(c, app_commands.Command)
         }
+        # 社長用コマンド（economy/payouts/codex）は一覧に載せない。
         groups = [
             ("💰 通貨・財布", ["balance", "login", "deposit", "cashout", "history", "ranking"]),
             ("🗺️ ゲーム", ["explore", "dex", "inventory", "quests", "profile", "badges"]),
@@ -322,9 +327,6 @@ class Economy(commands.Cog):
             ("🏪 ショップ", ["shop", "buy"]),
             ("ℹ️ その他", ["help"]),
         ]
-        # 管理コマンドは社長本人にだけ表示
-        if interaction.user.id == self.bot.cfg.owner_id:
-            groups.append(("🛠️ 管理（社長用）", ["economy", "payouts"]))
         embed = discord.Embed(
             title="📖 コマンド一覧",
             description=(
@@ -338,7 +340,8 @@ class Economy(commands.Cog):
             lines = [f"{self.bot.cmd(n)} — {desc_by_name[n]}" for n in names if n in desc_by_name]
             if lines:
                 embed.add_field(name=title, value="\n".join(lines), inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        # コマンド一覧は公開（他の人にも見える）
+        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="quests", description="デイリー＆通常クエストの進捗を確認・報酬受取")
     async def quests_cmd(self, interaction: discord.Interaction):
@@ -433,7 +436,8 @@ class Economy(commands.Cog):
             color=0x1ABC9C,
         )
         embed.set_footer(text="リリーコインは /cashout でよあコインに戻せます（手数料あり）")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        # 入金方法の案内は公開（他の人にも見える）
+        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="cashout", description="リリーコインをよあコインに換金します（手数料あり）")
     @app_commands.rename(amount="額")
