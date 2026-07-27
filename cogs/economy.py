@@ -291,6 +291,8 @@ class Economy(commands.Cog):
     # ---- commands ---------------------------------------------------------
     @app_commands.command(name="balance", description="財布（リリーコイン・ジェム）を確認します")
     async def balance(self, interaction: discord.Interaction):
+        # DB照会の前に応答を確保する（3秒の期限切れ＝Unknown interaction を防ぐ）
+        await interaction.response.defer(ephemeral=True)
         uid = interaction.user.id
         bal = await self.db.get_balance(uid)
         cfg = self.bot.cfg
@@ -310,7 +312,7 @@ class Economy(commands.Cog):
             ),
             inline=False,
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="help", description="すべてのコマンドの説明を表示します")
     async def help_cmd(self, interaction: discord.Interaction):
@@ -345,14 +347,16 @@ class Economy(commands.Cog):
 
     @app_commands.command(name="quests", description="デイリー＆通常クエストの進捗を確認・報酬受取")
     async def quests_cmd(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         embed = await self.build_quest_embed(interaction.user.id)
         view = QuestBoardView(self, interaction.user.id)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(name="history", description="最近のゲーム内での取引履歴を表示します")
     @app_commands.rename(count="件数")
     @app_commands.describe(count="表示する件数（既定10・最大20）")
     async def history(self, interaction: discord.Interaction, count: app_commands.Range[int, 1, 20] = 10):
+        await interaction.response.defer(ephemeral=True)
         rows = await self.db.recent_transactions(interaction.user.id, count)
         embed = discord.Embed(title="🧾 取引履歴", color=0x7F8C8D)
         if not rows:
@@ -365,16 +369,18 @@ class Economy(commands.Cog):
                 sign = "＋" if r["amount"] > 0 else "－"
                 lines.append(f"{label} … {sign}{abs(r['amount']):,} {cur}")
             embed.description = "\n".join(lines)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="login", description="ログインボーナスを受け取ります（1日1回・連続で増加）")
     async def login(self, interaction: discord.Interaction):
+        # ログインは公開（連続日数を見せ合えると楽しい）。先に応答枠を確保する。
+        await interaction.response.defer()
         uid = interaction.user.id
         period = quests.daily_period()
         row = await self.db.get_login(uid)
         if row and row["last_period"] == period:
-            await interaction.response.send_message(
-                "本日のログインボーナスは受取済みです。また明日どうぞ！", ephemeral=True)
+            await interaction.edit_original_response(
+                content="本日のログインボーナスは受取済みです。また明日どうぞ！")
             return
         prev = quests.daily_period(datetime.now(quests.JST) - timedelta(days=1))
         streak = (row["streak"] + 1) if (row and row["last_period"] == prev) else 1
@@ -389,8 +395,7 @@ class Economy(commands.Cog):
         )
         embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
         embed.set_footer(text="毎朝7:00(JST)にリセット")
-        # ログインは公開（連続日数を見せ合えると楽しい）。残高は伏せる。
-        await interaction.response.send_message(embed=embed)
+        await interaction.edit_original_response(embed=embed)
         await badges.notify(interaction, await badges.sync(self.db, uid))
 
     @app_commands.command(name="ranking", description="分野別のランキングを表示します")
@@ -404,6 +409,7 @@ class Economy(commands.Cog):
     ])
     async def ranking(self, interaction: discord.Interaction,
                       category: app_commands.Choice[str] | None = None):
+        await interaction.response.defer()
         cat = category.value if category else "coins"
         meta = {
             "coins": ("⚜️ リリーコイン所持ランキング", self.db.top_coins, "リリー"),
@@ -419,7 +425,7 @@ class Economy(commands.Cog):
             lines.append(f"{medal} <@{r['user_id']}> — **{r['v']:,}** {unit}")
         embed = discord.Embed(title=title, description="\n".join(lines) or "まだ誰もいません。",
                               color=0xF1C40F)
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="deposit", description="よあコインの入金方法を表示します")
     async def deposit(self, interaction: discord.Interaction):
@@ -446,6 +452,7 @@ class Economy(commands.Cog):
         self, interaction: discord.Interaction,
         amount: app_commands.Range[int, 1, 10_000_000],
     ):
+        await interaction.response.defer(ephemeral=True)
         cfg = self.bot.cfg
         uid = interaction.user.id
         now = int(time.time())
@@ -453,27 +460,27 @@ class Economy(commands.Cog):
         gross = amount
 
         if bal.coins < gross:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"リリーコインが足りません（所持 {bal.coins:,} {COIN}）。", ephemeral=True
             )
             return
         # 換金上限＝入金累計（無料リリーは換金不可・farmer対策・会社が損しない）
         cap = await self.db.withdrawable(uid)
         if gross > cap:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"換金できるのは**入金した分まで**です。換金可能枠は **{cap:,} リリー**。\n"
                 f"（ログインやクエストで得た無料リリーはゲーム内で使えます）",
                 ephemeral=True,
             )
             return
         if gross < cfg.min_withdraw:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"最低換金額は {cfg.min_withdraw} {COIN} です。", ephemeral=True
             )
             return
         last = await self.db.last_withdraw_at(uid)
         if now - last < cfg.withdraw_cooldown:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"⏳ 換金クールダウン中です。あと {cfg.withdraw_cooldown - (now - last)}秒。",
                 ephemeral=True,
             )
@@ -490,7 +497,7 @@ class Economy(commands.Cog):
         embed.add_field(name="受取よあコイン", value=f"**{net:,}** {YC}", inline=True)
         embed.set_footer(text=f"換金後の残高: {bal.coins - gross:,} リリー")
         view = ConfirmView(self, uid, "withdraw", gross, net, fee)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     # ---- 確認ボタンからの実行（リリーコイン → よあコイン） ----------------------
     async def execute_confirm(self, interaction: discord.Interaction, view: "ConfirmView"):

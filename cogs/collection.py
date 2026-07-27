@@ -706,16 +706,19 @@ class Collection(commands.Cog):
         area: app_commands.Choice[str] | None = None,
         use_bait: bool = False, premium: bool = False,
     ):
-        # 遭遇はみんなに見える（公開）／空振り・エラーは本人だけ（ephemeral）
+        # 遭遇はみんなに見える（公開）／空振り・エラーは本人だけ（ephemeral）。
+        # 主役の「遭遇」が公開なので公開でdeferし、本人だけに見せたい場合は
+        # _private() で公開の応答枠を取り消してから ephemeral で送る。
+        await interaction.response.defer()
         uid = interaction.user.id
         db = self.db
 
         # ---- 限定探索（チケット消費・遭遇確定） ----
         if premium:
             if not await db.try_consume_item(uid, LIMITED_TICKET, 1):
-                await interaction.response.send_message(
-                    "限定探索チケットがありません。`/shop` でジェムと交換できます。", ephemeral=True
-                )
+                await self._private(
+                    interaction,
+                    "限定探索チケットがありません。`/shop` でジェムと交換できます。")
                 return
             sp = game.weighted_encounter(pool=creatures.LIMITED_SPECIES)
             await db.bump_stat(uid, "explores")
@@ -735,9 +738,9 @@ class Collection(commands.Cog):
                 await db.unlock_area(uid, habitat)
                 unlocked = True
             else:
-                await interaction.response.send_message(
-                    f"{hb.emoji} **{hb.name}** はまだ解放されていません。\n{reason}", ephemeral=True
-                )
+                await self._private(
+                    interaction,
+                    f"{hb.emoji} **{hb.name}** はまだ解放されていません。\n{reason}")
                 return
 
         # 餌
@@ -749,8 +752,7 @@ class Collection(commands.Cog):
             elif await db.try_consume_item(uid, "bait", 1):
                 bonus, used_bait = BAIT_ENCOUNTER_BONUS, "餌"
             else:
-                await interaction.response.send_message(
-                    "餌を持っていません。`/shop` で購入できます。", ephemeral=True)
+                await self._private(interaction, "餌を持っていません。`/shop` で購入できます。")
                 return
 
         # 深度・天候・コスト
@@ -764,10 +766,10 @@ class Collection(commands.Cog):
 
         if not await db.try_spend_coins(uid, cost, reason="explore"):
             bal = await db.get_balance(uid)
-            await interaction.response.send_message(
+            await self._private(
+                interaction,
                 f"リリーが足りません（必要: {cost} / 所持: {bal.coins:,} リリー）。\n"
-                f"`/quests` や `/login` で稼ぎましょう。", ephemeral=True,
-            )
+                f"`/quests` や `/login` で稼ぎましょう。")
             return
         await db.set_explore_state(uid, habitat, depth, now)
         await db.bump_stat(uid, "explores")
@@ -784,7 +786,7 @@ class Collection(commands.Cog):
             if used_bait:
                 foot += f" ・ {used_bait}を1つ消費"
             embed.set_footer(text=foot)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await self._private(interaction, embed=embed)
             await notify_quests(interaction, await quests.record_event(db, uid, "explore"))
             await badges.notify(interaction, await badges.sync(db, uid))
             return
@@ -798,6 +800,24 @@ class Collection(commands.Cog):
         await notify_quests(interaction, await quests.record_event(db, uid, "explore"))
         await notify_quests(interaction, await quests.record_event(db, uid, "encounter"))
         await badges.notify(interaction, await badges.sync(db, uid))
+
+    async def _private(self, interaction: discord.Interaction, content: str | None = None,
+                       *, embed: discord.Embed | None = None) -> None:
+        """公開でdefer済みの応答枠を取り消し、本人にだけ見えるメッセージを返す。
+
+        /explore は主役の「遭遇」が公開なので公開でdeferしている。空振りやエラーの
+        ように本人だけに見せたいものは、公開の応答枠を消してから ephemeral で送る。
+        """
+        try:
+            await interaction.delete_original_response()
+        except discord.HTTPException:
+            pass
+        kwargs = {"ephemeral": True}
+        if embed is not None:
+            kwargs["embed"] = embed
+        if content is not None:
+            kwargs["content"] = content
+        await interaction.followup.send(**kwargs)
 
     async def _present_encounter(self, interaction, uid, sp, *, foot_extra=None, explore_cost=0, info=None):
         db = self.db
@@ -817,13 +837,8 @@ class Collection(commands.Cog):
         if foot_extra:
             foot += f" ・ {foot_extra}"
         embed.set_footer(text=foot + f" ・ {game.flee_seconds(sp)}秒で逃げる")
-        # 遭遇は公開（みんなに見える）
-        await interaction.response.send_message(embed=embed, view=view)
-        # 時間切れ時にメッセージを書き換えられるよう参照を保持
-        try:
-            view.message = await interaction.original_response()
-        except discord.HTTPException:
-            pass
+        # 遭遇は公開（みんなに見える）。時間切れ時に書き換えられるよう参照を保持する。
+        view.message = await interaction.followup.send(embed=embed, view=view, wait=True)
 
     async def claim_milestones(self, user_id: int) -> tuple[int, int, list[str]]:
         """達成済み・未受取の図鑑マイルストーン報酬を受け取る。(合計, 件数, 新規バッジID)。"""
@@ -897,6 +912,8 @@ class Collection(commands.Cog):
 
     @app_commands.command(name="dex", description="図鑑の収集状況とマイルストーン報酬を表示します")
     async def dex(self, interaction: discord.Interaction):
+        # 図鑑は公開（みんなに見える）。DB照会の前に応答枠を確保する。
+        await interaction.response.defer()
         uid = interaction.user.id
         embed = await self.build_dex_embed(uid)
         # マイルストーン受取可能ならボタン付き（本人操作）
@@ -906,8 +923,7 @@ class Collection(commands.Cog):
         view = (DexClaimView(self, uid)
                 if self._has_claimable_milestone(owned_normal, claimed)
                 else discord.utils.MISSING)
-        # 図鑑は公開（みんなに見える）
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.followup.send(embed=embed, view=view)
 
     async def perform_release(self, uid: int, inst: int) -> str:
         """1個体を逃がす。結果メッセージを返す（View/コマンド共通）。"""
@@ -957,14 +973,15 @@ class Collection(commands.Cog):
     @app_commands.rename(creature="生き物")
     @app_commands.describe(creature="逃がす生き物を選択")
     async def release(self, interaction: discord.Interaction, creature: str):
+        await interaction.response.defer(ephemeral=True)
         uid = interaction.user.id
         try:
             inst = int(creature)
         except (TypeError, ValueError):
-            await interaction.response.send_message("逃がす生き物を一覧から選択してください。", ephemeral=True)
+            await interaction.followup.send("逃がす生き物を一覧から選択してください。", ephemeral=True)
             return
         msg = await self.perform_release(uid, inst)
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.followup.send(msg, ephemeral=True)
         await badges.notify(interaction, await badges.sync(self.db, uid))
 
     async def _creature_autocomplete(self, interaction: discord.Interaction, current: str):
@@ -1021,15 +1038,20 @@ class Collection(commands.Cog):
     @app_commands.rename(base="残す生き物", material="素材にする生き物")
     @app_commands.describe(base="強化して残す方", material="消費する方（同じ種）")
     async def merge(self, interaction: discord.Interaction, base: str, material: str):
+        await interaction.response.defer(ephemeral=True)
         uid = interaction.user.id
         try:
             b, m = int(base), int(material)
         except (TypeError, ValueError):
-            await interaction.response.send_message("生き物を一覧から選択してください。", ephemeral=True)
+            await interaction.edit_original_response(content="生き物を一覧から選択してください。")
             return
         msg = await self.perform_merge(uid, b, m)
-        # 成功（🔗）は公開して自慢できる／失敗は本人のみ
-        await interaction.response.send_message(msg, ephemeral=not msg.startswith("🔗"))
+        if msg.startswith("🔗"):
+            # 成功は公開して自慢できるように（失敗は本人にだけ見せる）
+            await interaction.edit_original_response(content="✅ 合体しました！")
+            await interaction.followup.send(msg)
+        else:
+            await interaction.edit_original_response(content=msg)
         await badges.notify(interaction, await badges.sync(self.db, uid))
 
     @merge.autocomplete("base")
@@ -1042,6 +1064,7 @@ class Collection(commands.Cog):
 
     @app_commands.command(name="badges", description="獲得したバッジ（称号）を表示します")
     async def badges(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         uid = interaction.user.id
         new = await badges.sync(self.db, uid)
         have = await self.db.get_badges(uid)
@@ -1058,19 +1081,20 @@ class Collection(commands.Cog):
         embed.add_field(name="バッジ", value="\n".join(normal_lines), inline=False)
         embed.add_field(name="🕵️ 隠しバッジ", value="\n".join(secret_lines), inline=False)
         embed.set_footer(text=f"{len(have)} / {len(game.BADGE_LIST)} 獲得")
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
         await badges.notify(interaction, new)
 
     @app_commands.command(name="inventory", description="コレクションを開いて詳細確認・逃がす・合体・アイテム使用ができます")
     async def inventory(self, interaction: discord.Interaction):
+        # 操作パネルなので本人にだけ表示（ephemeral）
+        await interaction.response.defer(ephemeral=True)
         uid = interaction.user.id
         rows = await self.db.list_creatures(uid)
         items = await self.db.list_items(uid)
         cap = await self.db.get_creature_cap(uid)
         view = InventoryView(self, uid, rows, items, cap)
-        # 操作パネルなので本人にだけ表示（ephemeral）
-        await interaction.response.send_message(embed=view.build_embed(), view=view, ephemeral=True)
-        view.message = await interaction.original_response()
+        view.message = await interaction.followup.send(
+            embed=view.build_embed(), view=view, ephemeral=True, wait=True)
 
 
 def iid_label(item_id: str) -> str:

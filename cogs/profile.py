@@ -24,6 +24,8 @@ class Profile(commands.Cog):
     @app_commands.rename(user="ユーザー")
     @app_commands.describe(user="他の人のプロフィールを見る場合に指定")
     async def profile(self, interaction: discord.Interaction, user: discord.User | None = None):
+        # DB照会の前に応答を確保する（3秒の期限切れ＝Unknown interaction を防ぐ）
+        await interaction.response.defer()
         target = user or interaction.user
         uid = target.id
 
@@ -62,7 +64,7 @@ class Profile(commands.Cog):
                           f"（IV {best_pct:.0f}%・{game.iv_grade(best_pct)}・総合力 {pw}）",
                     inline=True,
                 )
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
 
 async def setup(bot: commands.Bot):

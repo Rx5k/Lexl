@@ -13,6 +13,7 @@ import asyncio
 import logging
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from api.payment_poller import PaymentPoller
@@ -76,10 +77,46 @@ class YoacoinBot(commands.Bot):
         # /help などで使うクリック可能なコマンドメンションを構築
         self.command_mentions = {c.name: c.mention for c in synced}
 
+        # スラッシュコマンドの共通エラー処理
+        self.tree.on_error = self._on_app_command_error
+
         # 入金ポーラ起動
         self.poller = PaymentPoller(self.cfg, self.db)
         self.poller.on_deposit = self._on_deposit
         self.poller.start()
+
+    async def _on_app_command_error(
+        self, interaction: discord.Interaction, error: app_commands.AppCommandError
+    ) -> None:
+        """全コマンド共通のエラー処理。
+
+        Unknown interaction (10062) は「Discordが発行した3秒の応答期限を過ぎた」ことを
+        意味する。ネットワーク遅延でイベント自体が遅れて届いた場合はコード側では
+        どうにもならないため、長大なトレースバックを出さず1行で記録するに留める。
+        """
+        original = getattr(error, "original", error)
+
+        if isinstance(original, discord.NotFound) and original.code == 10062:
+            log.warning(
+                "応答期限切れ (Unknown interaction): /%s ・ ネットワーク遅延の可能性",
+                getattr(interaction.command, "name", "?"),
+            )
+            return
+
+        if isinstance(error, app_commands.CheckFailure):
+            return  # 権限チェックは各コマンド側で案内済み
+
+        log.exception("コマンド /%s で例外", getattr(interaction.command, "name", "?"),
+                      exc_info=original)
+        # まだ応答していなければ、ユーザーに黙って失敗したと思われないよう伝える
+        msg = "⚠️ 処理中にエラーが発生しました。少し待ってからもう一度お試しください。"
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+        except discord.HTTPException:
+            pass
 
     async def _apply_currency_emojis(self) -> None:
         """Botのアプリ絵文字を名前(lily/yoa)で解決し、各Cogの表示絵文字に反映する。

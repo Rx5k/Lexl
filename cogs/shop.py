@@ -143,6 +143,8 @@ class Shop(commands.Cog):
 
     @app_commands.command(name="shop", description="ショップの品揃えと使い方を表示します")
     async def shop(self, interaction: discord.Interaction):
+        # 品揃えは公開（他の人にも見える）。DB照会の前に応答枠を確保する。
+        await interaction.response.defer()
         cfg = self.bot.cfg
         bal = await self.db.get_balance(interaction.user.id)
         embed = discord.Embed(
@@ -161,8 +163,7 @@ class Shop(commands.Cog):
             value = it["desc"] + (f"\n使い方: {use}" if use else "")
             embed.add_field(name=f"{it['name']} — {price_label(it)}", value=value, inline=False)
         embed.set_footer(text=f"所持: {bal.coins:,} リリー ・ {bal.gems:,} ジェム")
-        # 品揃えは公開（他の人にも見える）
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="buy", description="商品を選んで購入します")
     @app_commands.rename(item="商品", quantity="数量")
@@ -174,6 +175,7 @@ class Shop(commands.Cog):
         item: app_commands.Choice[str],
         quantity: app_commands.Range[int, 1, 99] = 1,
     ):
+        await interaction.response.defer(ephemeral=True)
         cfg = self.bot.cfg
         # 確認パネルを表示（実際の購入はボタンで実行）
         if item.value == GEMS_CHOICE_VALUE:
@@ -196,7 +198,7 @@ class Shop(commands.Cog):
         bal = await self.db.get_balance(interaction.user.id)
         embed.set_footer(text=f"所持: {bal.coins:,} リリー ・ {bal.gems:,} ジェム")
         view = BuyConfirmView(self, interaction.user.id, item.value, quantity)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     async def execute_buy(self, interaction: discord.Interaction, view: "BuyConfirmView"):
         """確認ボタンからの実際の購入処理（履歴は transactions に記録される）。"""
