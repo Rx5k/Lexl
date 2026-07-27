@@ -113,23 +113,81 @@ async def notify_quests(interaction: discord.Interaction, completed: list) -> No
 
 
 class TameView(discord.ui.View):
+    """遭遇中の行動パネル。手なずける／なつき薬／観察する／立ち去る。
+
+    生き物は一定時間で逃げてしまう（game.flee_seconds）。View.timeout は「無操作が
+    続いた秒数」でリセットされてしまうため、絶対時刻の期限 self.deadline を別に持ち、
+    毎回の操作でそれを超えていないか確認する。
+    """
+
     def __init__(self, cog: "Collection", user_id: int, sp: creatures.Species, has_charm: bool):
-        super().__init__(timeout=120)
+        limit = game.flee_seconds(sp)
+        super().__init__(timeout=limit + 5)
         self.cog = cog
         self.user_id = user_id
         self.sp = sp
         self.done = False
+        self.observed = False
+        self.attempts = 0
+        self.deadline = time.time() + limit
+        self.message: discord.Message | None = None
         if not has_charm:
             self.remove_item(self.use_charm)
 
+    # ---- 共通 ----
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("これはあなたの遭遇ではありません。", ephemeral=True)
             return False
         return True
 
-    async def _attempt(self, interaction: discord.Interaction, use_charm: bool):
+    @property
+    def remaining(self) -> int:
+        return max(0, int(self.deadline - time.time()))
+
+    def _bonus(self) -> float:
+        return game.OBSERVE_TAME_BONUS if self.observed else 0.0
+
+    def _disable_all(self) -> None:
+        for child in self.children:
+            child.disabled = True
+
+    def _status_line(self) -> str:
+        rate = int(game.tame_success_rate(self.sp, self._bonus()) * 100)
+        line = (f"コスト **{game.tame_cost(self.sp)} {COIN} リリー** / 成功率 約 **{rate}%**"
+                f"　⏳ 逃走まで <t:{int(self.deadline)}:R>")
+        if self.observed:
+            line += f"\n👁️ 観察済み（成功率 +{int(game.OBSERVE_TAME_BONUS*100)}%）"
+        return line
+
+    def _refresh(self, embed: discord.Embed) -> discord.Embed:
+        """埋め込みの「手なずけ」欄を現在の状態で作り直す。"""
+        embed.clear_fields()
+        embed.add_field(name="手なずけ", value=self._status_line(), inline=False)
+        return embed
+
+    async def _flee(self, interaction: discord.Interaction) -> None:
+        """時間切れ。逃げられたことを伝えてパネルを閉じる。"""
+        self.done = True
+        self._disable_all()
+        embed = creature_embed(
+            self.sp, title=f"💨 {self.sp.name} は逃げてしまった…", color=0x7F8C8D)
+        embed.add_field(name="結果",
+                        value="時間をかけすぎたようだ。次はもう少し早く決断しよう。", inline=False)
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.stop()
+
+    async def _expired(self, interaction: discord.Interaction) -> bool:
         if self.done:
+            return True
+        if self.remaining <= 0:
+            await self._flee(interaction)
+            return True
+        return False
+
+    # ---- 手なずけ ----
+    async def _attempt(self, interaction: discord.Interaction, use_charm: bool):
+        if await self._expired(interaction):
             return
         db = self.cog.db
         uid = self.user_id
@@ -143,12 +201,12 @@ class TameView(discord.ui.View):
             )
             return
 
-        bonus = 0.0
+        bonus = self._bonus()
         if use_charm:
             if not await db.try_consume_item(uid, "charm", 1):
                 await interaction.response.send_message("なつき薬を持っていません。", ephemeral=True)
                 return
-            bonus = CHARM_TAME_BONUS
+            bonus += CHARM_TAME_BONUS
 
         if not await db.try_spend_coins(uid, cost, reason="tame"):
             bal = await db.get_balance(uid)
@@ -157,6 +215,7 @@ class TameView(discord.ui.View):
             )
             return
 
+        self.attempts += 1
         success = game.try_tame(self.sp, bonus)
         rate = int(game.tame_success_rate(self.sp, bonus) * 100)
 
@@ -171,8 +230,7 @@ class TameView(discord.ui.View):
             embed.add_field(name="個体値 (IV)",
                             value=f"HP {ivh} / ATK {iva} / DEF {ivd}　→ **{pct:.1f}%**", inline=False)
             embed.set_footer(text=f"消費 {cost} リリー（成功率 {rate}%）・ 残高 {bal.coins:,} リリー")
-            for child in self.children:
-                child.disabled = True
+            self._disable_all()
             await interaction.response.edit_message(embed=embed, view=self)
             completed = await quests.record_event(db, uid, "tame_success")
             await notify_quests(interaction, completed)
@@ -181,11 +239,14 @@ class TameView(discord.ui.View):
         else:
             bal = await db.get_balance(uid)
             embed = creature_embed(self.sp, title=f"💨 {self.sp.name} は警戒している…", color=0xE67E22)
+            self._refresh(embed)
             embed.add_field(name="結果",
-                            value=f"手なずけ失敗（成功率 {rate}%）。もう一度試せます。", inline=False)
+                            value=f"手なずけ失敗（成功率 {rate}%）。逃げられる前にもう一度！",
+                            inline=False)
             embed.set_footer(text=f"消費 {cost} リリー ・ 残高 {bal.coins:,} リリー")
             await interaction.response.edit_message(embed=embed, view=self)
 
+    # ---- ボタン ----
     @discord.ui.button(label="手なずける", style=discord.ButtonStyle.primary, emoji="🤝")
     async def tame(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._attempt(interaction, use_charm=False)
@@ -194,9 +255,66 @@ class TameView(discord.ui.View):
     async def use_charm(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._attempt(interaction, use_charm=True)
 
+    @discord.ui.button(label="観察する（無料）", style=discord.ButtonStyle.secondary, emoji="👁️")
+    async def observe(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """無料で詳しく調べる。成功率が少し上がるが、そのぶん時間を使う。"""
+        if await self._expired(interaction):
+            return
+        if self.observed:
+            await interaction.response.send_message("すでに観察しています。", ephemeral=True)
+            return
+        self.observed = True
+        button.disabled = True
+        # 観察には時間がかかる＝逃走までの猶予が減る
+        self.deadline -= game.OBSERVE_FLEE_PENALTY
+        if self.remaining <= 0:
+            await self._flee(interaction)
+            return
+
+        sp = self.sp
+        el_name, el_emoji = sp.element_info
+        hb = sp.habitat_info
+        embed = creature_embed(sp, title=f"👁️ {sp.name} をじっと観察した", color=0x3498DB)
+        self._refresh(embed)
+        embed.add_field(
+            name="観察でわかったこと",
+            value=(f"属性: {el_emoji} {el_name}　レア度: {sp.rarity_info.emoji} {sp.rarity_info.label}\n"
+                   f"生息: {hb.emoji} {hb.name}　基礎合計: **{sp.base_hp + sp.base_atk + sp.base_def}**\n"
+                   f"警戒心が少しゆるんだ（成功率 +{int(game.OBSERVE_TAME_BONUS*100)}%）"),
+            inline=False,
+        )
+        embed.set_footer(text=f"観察に {game.OBSERVE_FLEE_PENALTY} 秒かかった ・ リリーの消費なし")
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="立ち去る", style=discord.ButtonStyle.secondary, emoji="🚶")
+    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """この遭遇をあきらめる（リリーの消費なし）。"""
+        if self.done:
+            return
+        self.done = True
+        self._disable_all()
+        embed = creature_embed(
+            self.sp, title=f"🚶 {self.sp.name} をそっとしておいた", color=0x95A5A6)
+        embed.add_field(name="結果", value="そっと立ち去った。リリーは消費していない。", inline=False)
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.stop()
+
     async def on_timeout(self):
-        for child in self.children:
-            child.disabled = True
+        """無操作のまま時間切れ → 逃げられた表示に差し替える。"""
+        if self.done:
+            return
+        self.done = True
+        self._disable_all()
+        if self.message is None:
+            return
+        embed = creature_embed(
+            self.sp, title=f"💨 {self.sp.name} は逃げてしまった…", color=0x7F8C8D)
+        embed.add_field(name="結果",
+                        value="待っているあいだに、どこかへ行ってしまった。", inline=False)
+        try:
+            await self.message.edit(embed=embed, view=self)
+        except discord.HTTPException:
+            pass
 
 
 class DexClaimView(discord.ui.View):
@@ -690,18 +808,22 @@ class Collection(commands.Cog):
                                color=0x9B59B6)
         if info:
             embed.description = f"{info}\n{embed.description}"
-        embed.add_field(name="手なずけ",
-                        value=f"コスト **{cost} {COIN} リリー** / 成功率 約 {int(game.tame_success_rate(sp)*100)}%",
-                        inline=False)
+        view = TameView(self, uid, sp, has_charm)
+        # 逃走までの残り時間つきで「手なずけ」欄を作る
+        view._refresh(embed)
         foot = f"残高 {bal.coins:,} リリー"
         if explore_cost:
             foot = f"探索消費 {explore_cost} リリー ・ " + foot
         if foot_extra:
             foot += f" ・ {foot_extra}"
-        embed.set_footer(text=foot)
-        view = TameView(self, uid, sp, has_charm)
+        embed.set_footer(text=foot + f" ・ {game.flee_seconds(sp)}秒で逃げる")
         # 遭遇は公開（みんなに見える）
         await interaction.response.send_message(embed=embed, view=view)
+        # 時間切れ時にメッセージを書き換えられるよう参照を保持
+        try:
+            view.message = await interaction.original_response()
+        except discord.HTTPException:
+            pass
 
     async def claim_milestones(self, user_id: int) -> tuple[int, int, list[str]]:
         """達成済み・未受取の図鑑マイルストーン報酬を受け取る。(合計, 件数, 新規バッジID)。"""

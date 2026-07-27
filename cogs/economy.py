@@ -325,7 +325,7 @@ class Economy(commands.Cog):
             ("🗺️ ゲーム", ["explore", "dex", "inventory", "quests", "profile", "badges"]),
             ("🐾 生き物の操作", ["release", "merge"]),
             ("🏪 ショップ", ["shop", "buy"]),
-            ("ℹ️ その他", ["help"]),
+            ("ℹ️ その他", ["help", "contact"]),
         ]
         embed = discord.Embed(
             title="📖 コマンド一覧",

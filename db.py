@@ -173,6 +173,22 @@ CREATE TABLE IF NOT EXISTS user_stats (
     releases  INTEGER NOT NULL DEFAULT 0,
     max_depth INTEGER NOT NULL DEFAULT 0
 );
+
+-- 問い合わせ・要望（/contact）。社長へのDMが届かなくても /inbox で拾えるよう保存する。
+CREATE TABLE IF NOT EXISTS contacts (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id  INTEGER NOT NULL,
+    user_tag TEXT    NOT NULL DEFAULT '',
+    guild_id INTEGER,
+    guild    TEXT    NOT NULL DEFAULT '',
+    kind     TEXT    NOT NULL,
+    subject  TEXT    NOT NULL,
+    body     TEXT    NOT NULL,
+    status   TEXT    NOT NULL DEFAULT 'new',   -- new / read / replied
+    ts       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_contacts_status ON contacts(status, id);
+CREATE INDEX IF NOT EXISTS idx_contacts_user ON contacts(user_id, ts);
 """
 
 
@@ -1004,6 +1020,58 @@ class Database:
         return await self._top(
             "SELECT user_id, COUNT(*) AS v FROM user_badges "
             "GROUP BY user_id ORDER BY v DESC LIMIT ?", limit)
+
+    # ---- 問い合わせ・要望（/contact ・ /inbox） ----------------------------
+    async def add_contact(self, user_id: int, user_tag: str, guild_id: int | None,
+                          guild: str, kind: str, subject: str, body: str) -> int:
+        async with self._tx():
+            cur = await self.conn.execute(
+                "INSERT INTO contacts(user_id, user_tag, guild_id, guild, kind, subject, body, ts) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (user_id, user_tag, guild_id, guild, kind, subject, body, _now()),
+            )
+            return int(cur.lastrowid)
+
+    async def list_contacts(self, status: str | None = None, limit: int = 20) -> list[aiosqlite.Row]:
+        if status:
+            sql = "SELECT * FROM contacts WHERE status = ? ORDER BY id DESC LIMIT ?"
+            params: tuple = (status, limit)
+        else:
+            sql = "SELECT * FROM contacts ORDER BY id DESC LIMIT ?"
+            params = (limit,)
+        async with self.conn.execute(sql, params) as cur:
+            return list(await cur.fetchall())
+
+    async def get_contact(self, contact_id: int) -> aiosqlite.Row | None:
+        async with self.conn.execute(
+            "SELECT * FROM contacts WHERE id = ?", (contact_id,)
+        ) as cur:
+            return await cur.fetchone()
+
+    async def set_contact_status(self, contact_id: int, status: str) -> bool:
+        async with self._tx():
+            cur = await self.conn.execute(
+                "UPDATE contacts SET status = ? WHERE id = ?", (status, contact_id)
+            )
+            return cur.rowcount > 0
+
+    async def contact_counts(self) -> dict[str, int]:
+        async with self.conn.execute(
+            "SELECT status, COUNT(*) AS c FROM contacts GROUP BY status"
+        ) as cur:
+            return {r["status"]: r["c"] for r in await cur.fetchall()}
+
+    async def recent_contact_stats(self, user_id: int, window: int) -> tuple[int, int]:
+        """(直近の投稿時刻, window秒以内の件数)。連投スパム抑止に使う。"""
+        since = _now() - window
+        async with self.conn.execute(
+            "SELECT COALESCE(MAX(ts),0) AS last, "
+            "COALESCE(SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END),0) AS n "
+            "FROM contacts WHERE user_id = ?",
+            (since, user_id),
+        ) as cur:
+            r = await cur.fetchone()
+        return r["last"], r["n"]
 
     # ---- 全体統計（社長用の /codex 資料室） -------------------------------
     async def species_owner_counts(self) -> dict[str, tuple[int, int]]:

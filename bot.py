@@ -32,6 +32,7 @@ INITIAL_COGS = [
     "cogs.profile",
     "cogs.admin",
     "cogs.codex",
+    "cogs.contact",
 ]
 
 

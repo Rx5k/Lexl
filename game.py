@@ -106,6 +106,20 @@ def tame_cost(species: Species) -> int:
     return int(TAME_BASE_COST * species.rarity_info.tame_cost_mult)
 
 
+# ---- 遭遇中の行動（逃走タイマー・観察） --------------------------------------
+# 遭遇した生き物が逃げるまでの秒数。レアなほど警戒心が強く、早く逃げる＝緊張感。
+FLEE_SECONDS = {
+    "common": 150, "uncommon": 120, "rare": 90, "epic": 70, "legendary": 50,
+}
+OBSERVE_TAME_BONUS = 0.05   # 「観察する」で得られる手なずけ成功率の上乗せ（1回だけ）
+OBSERVE_FLEE_PENALTY = 15   # 観察は時間を使う（逃走までの残り時間が減る）
+
+
+def flee_seconds(species: Species) -> int:
+    """この個体が逃げ出すまでの猶予（秒）。"""
+    return FLEE_SECONDS[species.rarity]
+
+
 def tame_success_rate(species: Species, bonus: float = 0.0) -> float:
     base = species.rarity_info.tame_base_rate
     return max(0.02, min(0.95, base + bonus))

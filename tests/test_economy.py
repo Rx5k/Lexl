@@ -296,6 +296,32 @@ def test_habitats_have_pools():
         assert len(creatures.species_in_habitat(key)) >= 1
 
 
+# ---- 遭遇中の行動（逃走タイマー・観察） -------------------------------------
+def test_flee_time_shorter_for_rarer():
+    """レアなほど早く逃げる＝希少個体ほど判断を急ぐ必要がある。"""
+    order = ["common", "uncommon", "rare", "epic", "legendary"]
+    secs = [game.FLEE_SECONDS[r] for r in order]
+    assert secs == sorted(secs, reverse=True), secs
+    # 観察のペナルティを引いても行動できる余地を必ず残す
+    for r in order:
+        assert game.FLEE_SECONDS[r] > game.OBSERVE_FLEE_PENALTY * 2, r
+
+
+def test_every_rarity_has_flee_time():
+    for sp in creatures.CATALOG:
+        assert game.flee_seconds(sp) > 0, sp.species_id
+
+
+def test_observe_bonus_is_modest():
+    """観察は無料なので、なつき薬（有料）より効果が小さいこと。"""
+    assert 0 < game.OBSERVE_TAME_BONUS < 0.20
+    for sp in creatures.CATALOG:
+        base = game.tame_success_rate(sp)
+        observed = game.tame_success_rate(sp, game.OBSERVE_TAME_BONUS)
+        assert observed >= base
+        assert observed <= 0.95  # 上限は超えない
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     passed = 0
