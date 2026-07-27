@@ -25,15 +25,15 @@ NORMAL_SLOTS = 3   # 通常クエストの枠数
 DAILY_SLOTS = 3    # デイリークエストの枠数
 
 # ジェム1個のリリー建て価値。報酬の過剰配布を防ぐため、実売価より高めに見積もる。
-GEM_VALUE_COINS = 200
+GEM_VALUE_COINS = 120
 
 # アイテムの価値（報酬計算・total_value 用）。ショップの実売価と一致させること。
 # ジェム建ての商品は GEM_VALUE_COINS 換算（＝タダで配る量を絞る）。
 REWARD_ITEM_VALUE = {
-    "bait": 200,                             # ショップ 200 リリー
-    "charm": 600,                            # ショップ 600 リリー
-    "name_tag": 300,                         # ショップ 300 リリー
-    "reroll_ticket": 400,                    # ショップ 400 リリー
+    "bait": 100,                             # ショップ 100 リリー
+    "charm": 300,                            # ショップ 300 リリー
+    "name_tag": 150,                         # ショップ 150 リリー
+    "reroll_ticket": 250,                    # ショップ 250 リリー
     "gold_bait": 2 * GEM_VALUE_COINS,        # ショップ 2 ジェム
     "limited_ticket": 5 * GEM_VALUE_COINS,   # ショップ 5 ジェム
 }
@@ -50,8 +50,9 @@ REWARD_ITEM_MAX_QTY = {
 }
 
 # 1回(1アクション)あたりの報酬リリー。各イベントの「最低消費/回」より必ず小さい
-# （explore≥250, encounter≥357, tame_success≥757）＝常に純シンク。
-REWARD_PER_ACTION = {"explore": 150, "encounter": 200, "tame_success": 430}
+# （explore≥120, encounter≥171, tame_success≥391）＝常に純シンク。
+# 探索コストを下げたぶん、ここも同じ比率で下げて「消費>報酬」を保つ。
+REWARD_PER_ACTION = {"explore": 70, "encounter": 95, "tame_success": 230}
 
 # 難易度帯: (目標の最小, 最大, 選ばれる重み)
 NORMAL_TIERS = {

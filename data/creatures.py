@@ -52,13 +52,15 @@ class Habitat:
 
 
 # 生息エリア（探索先）。unlock: start=常時 / ("dex",n)=図鑑n種で解放 / ticket=解放チケット必要
+# 探索コストは「よあコイン5,000の入金で十分に遊べる」ことを基準に設定している。
+# （草原なら約40回探索でき、ノーマルを10体前後は捕まえられる想定）
 HABITATS: dict[str, Habitat] = {
-    "grassland": Habitat("grassland", "草原", "🌾", 250, ("start",)),
-    "forest":    Habitat("forest",    "森",   "🌳", 300, ("start",)),
-    "water":     Habitat("water",     "水辺", "💧", 350, ("dex", 6)),
-    "snow":      Habitat("snow",      "雪山", "❄️", 400, ("dex", 10)),
-    "cave":      Habitat("cave",      "洞窟", "🕳️", 400, ("ticket",)),
-    "sky":       Habitat("sky",       "空",   "☁️", 500, ("ticket",)),
+    "grassland": Habitat("grassland", "草原", "🌾", 120, ("start",)),
+    "forest":    Habitat("forest",    "森",   "🌳", 150, ("start",)),
+    "water":     Habitat("water",     "水辺", "💧", 190, ("dex", 6)),
+    "snow":      Habitat("snow",      "雪山", "❄️", 230, ("dex", 10)),
+    "cave":      Habitat("cave",      "洞窟", "🕳️", 240, ("ticket",)),
+    "sky":       Habitat("sky",       "空",   "☁️", 300, ("ticket",)),
 }
 DEFAULT_HABITAT = "grassland"
 

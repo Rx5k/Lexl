@@ -73,7 +73,7 @@ class Config:
             withdraw_fee_bps=max(0, min(10000, _get_int("WITHDRAW_FEE_BPS", 1000))),
             min_withdraw=max(1, _get_int("MIN_WITHDRAW", 100)),
             withdraw_cooldown=max(0, _get_int("WITHDRAW_COOLDOWN", 300)),
-            gem_price_coins=max(1, _get_int("GEM_PRICE_COINS", 200)),
+            gem_price_coins=max(1, _get_int("GEM_PRICE_COINS", 120)),
             payout_enabled=_get_bool("PAYOUT_ENABLED", True),
             balance_api_enabled=_get_bool("BALANCE_API_ENABLED", False),
             charge_enabled=_get_bool("CHARGE_ENABLED", False),

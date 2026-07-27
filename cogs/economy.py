@@ -222,7 +222,7 @@ class Economy(commands.Cog):
             return "本日の無料リロールを使用します（コスト無料）"
         if await self.db.get_item_qty(user_id, "reroll_ticket") > 0:
             return "🔄 リロール券を1枚消費します"
-        return f"⚜️ {game.REROLL_COST_COINS} リリーを消費します"
+        return f"{COIN} {game.REROLL_COST_COINS} リリーを消費します"
 
     async def reroll_normal_quests(self, user_id: int) -> tuple[bool, str]:
         """通常クエストの全枠を引き直す。1日1回無料、以降はリロール券orリリー。"""
@@ -412,7 +412,7 @@ class Economy(commands.Cog):
         await interaction.response.defer()
         cat = category.value if category else "coins"
         meta = {
-            "coins": ("⚜️ リリーコイン所持ランキング", self.db.top_coins, "リリー"),
+            "coins": (f"{COIN} リリーコイン所持ランキング", self.db.top_coins, "リリー"),
             "species": ("📖 図鑑 収集数ランキング", self.db.top_species, "種"),
             "creatures": ("🐾 生き物の数ランキング", self.db.top_creatures, "体"),
             "badges": ("🎖️ バッジ数ランキング", self.db.top_badges, "個"),

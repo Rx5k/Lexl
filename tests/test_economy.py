@@ -46,6 +46,38 @@ def test_reward_per_action_below_min_cost():
     assert quests.REWARD_PER_ACTION["tame_success"] < base / game.ENCOUNTER_CHANCE + game.TAME_BASE_COST
 
 
+STARTER_DEPOSIT = 5000  # 「よあコイン5,000の入金で十分に遊べる」ことを保証する基準額
+
+
+def test_starter_budget_is_playable():
+    """5,000リリー（＝よあコイン5,000の入金）で十分に遊べること。
+
+    コストを上げる調整をしたときに、初心者が何もできなくなるのを防ぐ。
+    """
+    grassland = game.explore_cost("grassland", 0)
+    assert STARTER_DEPOSIT // grassland >= 35, f"草原の探索が{STARTER_DEPOSIT // grassland}回しかできない"
+
+    common = next(s for s in creatures.CATALOG if s.rarity == "common" and not s.limited)
+    catches = STARTER_DEPOSIT / game.expected_cost_per_catch(common)
+    assert catches >= 8, f"ノーマルを{catches:.1f}体しか捕まえられない"
+
+    # 最初の図鑑マイルストーン(3種)には無理なく届くこと
+    assert game.expected_cost_per_catch(common) * 3 < STARTER_DEPOSIT * 0.5
+
+    # 全エリアが開始資金で複数回は探索できること（極端に高いエリアを作らない）
+    for key, hab in creatures.HABITATS.items():
+        assert STARTER_DEPOSIT // game.explore_cost(key, 0) >= 10, (key, hab.base_cost)
+
+
+def test_shop_prices_are_affordable_vs_actions():
+    """消耗品が「その行動そのもの」より高くならないこと（買う意味がなくなる）。"""
+    from cogs.shop import SHOP_ITEMS
+    # 餌は探索を補助する道具なので、探索1回のコストを大きく超えない
+    assert SHOP_ITEMS["bait"]["price_coins"] <= game.explore_cost("forest", 0)
+    # なつき薬は手なずけ1回のコストを大きく超えない
+    assert SHOP_ITEMS["charm"]["price_coins"] <= game.TAME_BASE_COST * 2
+
+
 def test_rare_costs_more_than_common_to_catch():
     common = next(s for s in creatures.CATALOG if s.rarity == "common" and not s.limited)
     legendary = next(s for s in creatures.CATALOG if s.rarity == "legendary" and not s.limited)

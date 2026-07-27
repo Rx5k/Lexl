@@ -19,13 +19,14 @@ from data.creatures import CATALOG, HABITATS, Species, species_in_habitat
 IV_MAX = 31  # 個体値の最大（HP/ATK/DEF 各 0..31）
 
 # ---- リリーコイン経済（よあコイン建て） ------------------------------------------
-# 探索(sink)。EXPLORE_COST はエリア未指定時の名目値／各エリアは HABITATS.base_cost。
-EXPLORE_COST = 300
+# 探索(sink)。EXPLORE_COST は期待値計算に使う代表値（初期エリアの相場）。
+# 実際の消費は explore_cost() が HABITATS.base_cost × 深度倍率で決める。
+EXPLORE_COST = 150
 ENCOUNTER_CHANCE = 0.70
 MIN_EXPLORE_COST = min(h.base_cost for h in HABITATS.values())
 
 # 手なずけ(sink)
-TAME_BASE_COST = 400
+TAME_BASE_COST = 220
 
 # クエスト報酬（リリーコイン額）は quests.py の QuestDef.reward で定義。
 # 目標達成型クエストは「達成に必要な消費 > 報酬」を保ち、常に純シンクにする
@@ -276,9 +277,9 @@ def max_daily_login() -> int:
 # ============================================================================
 # クエストリロール・合体・命名・インベントリ拡張
 # ============================================================================
-REROLL_COST_COINS = 500      # 無料枠使用後の通常クエストリロール（sink）
-MERGE_COST_COINS = 300       # 合体1回のコスト（sink）
-NICKNAME_COST_COINS = 100    # なまえ札が無い場合のリリー命名コスト（sink）
+REROLL_COST_COINS = 280      # 無料枠使用後の通常クエストリロール（sink）
+MERGE_COST_COINS = 170       # 合体1回のコスト（sink）
+NICKNAME_COST_COINS = 60     # なまえ札が無い場合のリリー命名コスト（sink）
 CAP_EXPANSION_STEP = 10      # インベントリ拡張アイテム1個で +10 スロット
 DEFAULT_CREATURE_CAP = 50
 MERGE_IV_BOOST = 2           # 合体時の各IV上昇

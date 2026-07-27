@@ -17,13 +17,13 @@ SHOP_ITEMS: dict[str, dict] = {
     "bait": {
         "name": "🍖 餌",
         "desc": "探索の遭遇率アップ（+20%）。`/explore use_bait:true` で使用。",
-        "price_coins": 200,
+        "price_coins": 100,
         "price_gems": 0,
     },
     "charm": {
         "name": "🧪 なつき薬",
         "desc": "手なずけの成功率アップ（+20%）。遭遇後のボタンで使用。",
-        "price_coins": 600,
+        "price_coins": 300,
         "price_gems": 0,
     },
     "gold_bait": {
@@ -53,13 +53,13 @@ SHOP_ITEMS: dict[str, dict] = {
     "reroll_ticket": {
         "name": "🔄 クエストリロール券",
         "desc": "通常クエストを追加で引き直せる（現金リロールより割安）。`/quests` のリロールで自動使用。",
-        "price_coins": 400,
+        "price_coins": 250,
         "price_gems": 0,
     },
     "name_tag": {
         "name": "🏷️ なまえ札",
         "desc": "生き物に名前を付けられる。`/inventory` から使用。",
-        "price_coins": 300,
+        "price_coins": 150,
         "price_gems": 0,
     },
     "cap_expansion": {
