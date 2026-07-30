@@ -12,10 +12,31 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 import ssl
 from dataclasses import dataclass
 
 import aiohttp
+
+# IPv6 が繋がらない環境では、接続時に IPv6 を先に試して長時間ハングすることがある
+# （aiohttp の happy-eyeballs が両系統を並行して試すため）。IPv4 に固定すると
+# その待ちが消える。ホストのIPv6が正常なら False にしてよい。
+FORCE_IPV4 = True
+
+
+def _make_connector() -> aiohttp.TCPConnector:
+    """接続の待ちでイベントループが詰まらないようにしたコネクタ。"""
+    return aiohttp.TCPConnector(
+        ssl=_make_ssl_context(),
+        family=socket.AF_INET if FORCE_IPV4 else socket.AF_UNSPEC,
+        limit=20,
+        ttl_dns_cache=300,     # DNSを都度引き直さない（名前解決失敗の連発を緩和）
+    )
+
+
+def _err_detail(e: BaseException) -> str:
+    """例外の説明。str() が空になる例外が多いので型名で補う。"""
+    return str(e) or e.__class__.__name__
 
 
 def _make_ssl_context() -> ssl.SSLContext:
@@ -70,7 +91,10 @@ class YoacoinClient:
     def __init__(self, base_url: str, api_key: str, *, timeout: float = 10.0):
         self._base = base_url.rstrip("/")
         self._headers = {"Authorization": f"Bearer {api_key}"}
-        self._timeout = aiohttp.ClientTimeout(total=timeout)
+        # 接続段階にも個別の上限を設ける。到達できない相手に総timeoutぶん
+        # ぶら下がると、その間ポーラが次に進めず再接続が積み上がる。
+        self._timeout = aiohttp.ClientTimeout(
+            total=timeout, connect=5.0, sock_connect=5.0, sock_read=timeout)
         self._session: aiohttp.ClientSession | None = None
 
     async def __aenter__(self) -> "YoacoinClient":
@@ -82,8 +106,8 @@ class YoacoinClient:
 
     async def start(self) -> None:
         if self._session is None:
-            connector = aiohttp.TCPConnector(ssl=_make_ssl_context())
-            self._session = aiohttp.ClientSession(timeout=self._timeout, connector=connector)
+            self._session = aiohttp.ClientSession(
+                timeout=self._timeout, connector=_make_connector())
 
     async def close(self) -> None:
         if self._session is not None:
@@ -112,7 +136,7 @@ class YoacoinClient:
                 return data
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             # 接続不能・SSL・タイムアウト等も YoacoinAPIError に正規化（呼び出し側で一律処理）
-            raise YoacoinAPIError(0, f"接続エラー: {e}") from e
+            raise YoacoinAPIError(0, f"接続エラー: {_err_detail(e)}") from e
 
     async def health(self) -> bool:
         """GET /health（認証不要）。到達できれば True。"""
@@ -139,7 +163,7 @@ class YoacoinClient:
                     raise YoacoinAPIError(resp.status, msg)
                 return data
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            raise YoacoinAPIError(0, f"接続エラー: {e}") from e
+            raise YoacoinAPIError(0, f"接続エラー: {_err_detail(e)}") from e
 
     async def payout(
         self, user_id: int, amount: int, idempotency_key: str, kind: str = "withdraw"

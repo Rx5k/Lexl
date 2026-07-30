@@ -21,6 +21,9 @@ from db import Database
 
 log = logging.getLogger("yoacoin.poller")
 
+MAX_BACKOFF = 300       # 連続失敗時の最大待ち時間（秒）
+LOG_EVERY = 15          # 連続失敗が続くとき、何回に1回ログを出すか
+
 
 class PaymentPoller:
     def __init__(self, cfg: Config, db: Database, *, dry_run: bool = False):
@@ -30,9 +33,33 @@ class PaymentPoller:
         self.limit = 100
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
+        self._fail_streak = 0
         # 入金を検知したときに呼ばれるフック（Bot側で通知に使う）。
         # 引数: (discord_user_id, yoacoin_amount, gems_granted)
         self.on_deposit = None
+
+    def _backoff(self) -> float:
+        """次に待つ秒数。APIに到達できない間は指数的に伸ばす。
+
+        到達できない相手に数秒おきで接続し続けると、接続待ちが積み上がって
+        イベントループを圧迫し、Discordのハートビートまで巻き添えになる。
+        """
+        if self._fail_streak == 0:
+            return float(self.cfg.poll_interval)
+        delay = self.cfg.poll_interval * (2 ** min(self._fail_streak, 8))
+        return float(min(delay, MAX_BACKOFF))
+
+    def _note_failure(self, e: object) -> None:
+        self._fail_streak += 1
+        # 毎回出すとログが埋まるので、最初と一定間隔だけ記録する
+        if self._fail_streak == 1 or self._fail_streak % LOG_EVERY == 0:
+            log.warning("payments 取得エラー（%d回連続・次は%.0f秒後）: %s",
+                        self._fail_streak, self._backoff(), e)
+
+    def _note_success(self) -> None:
+        if self._fail_streak:
+            log.info("payments 取得が回復しました（%d回連続失敗のあと）", self._fail_streak)
+            self._fail_streak = 0
 
     def start(self) -> None:
         if self._task is None:
@@ -51,20 +78,22 @@ class PaymentPoller:
             while not self._stop.is_set():
                 try:
                     caught_up = await self._poll_once(client)
+                    self._note_success()
                 except YoacoinAPIError as e:
-                    # 401(キー不正)/5xx など。停止せず一定間隔で再試行。
-                    log.warning("payments 取得エラー: %s", e)
+                    # 401(キー不正)/5xx/接続不能 など。停止せず、間隔を空けて再試行。
+                    self._note_failure(e)
                     caught_up = True
-                except Exception:
-                    log.exception("ポーリング中に予期せぬ例外")
+                except Exception as e:
+                    if self._fail_streak == 0:
+                        log.exception("ポーリング中に予期せぬ例外")
+                    self._note_failure(e)
                     caught_up = True
 
                 if caught_up:
-                    # 追いついたら interval 待つ（stop で即抜ける）
+                    # 追いついたら待つ。失敗が続く間は指数的に間隔を伸ばす
+                    # （stop されたら即座に抜ける）
                     try:
-                        await asyncio.wait_for(
-                            self._stop.wait(), timeout=self.cfg.poll_interval
-                        )
+                        await asyncio.wait_for(self._stop.wait(), timeout=self._backoff())
                     except asyncio.TimeoutError:
                         pass
         log.info("入金ポーラ停止")

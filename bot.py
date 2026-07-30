@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
 
+from api import yoacoin_client
 from api.payment_poller import PaymentPoller
 from config import Config
 from db import Database
@@ -38,10 +41,10 @@ INITIAL_COGS = [
 
 
 class YoacoinBot(commands.Bot):
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, **options):
         intents = discord.Intents.default()
         # メッセージ本文は不要（スラッシュコマンド中心）。
-        super().__init__(command_prefix="!", intents=intents, help_command=None)
+        super().__init__(command_prefix="!", intents=intents, help_command=None, **options)
         self.cfg = cfg
         self.db = Database(cfg.db_path, start_reserve=cfg.company_start_reserve)
         self.poller: PaymentPoller | None = None
@@ -190,11 +193,30 @@ class YoacoinBot(commands.Bot):
         await super().close()
 
 
+async def _run(cfg: Config) -> None:
+    """DiscordへもIPv4固定のコネクタで繋ぐ。
+
+    IPv6が繋がらないホストだと、接続時にIPv6を先に試して長く待たされ、その間
+    イベントループが詰まってハートビートが止まる（= 切断・コマンドの応答期限切れ）。
+    コネクタはイベントループ上で作る必要があるため、run() ではなく start() を使う。
+    """
+    connector = aiohttp.TCPConnector(
+        family=socket.AF_INET if yoacoin_client.FORCE_IPV4 else socket.AF_UNSPEC,
+        limit=100,
+        ttl_dns_cache=300,
+    )
+    bot = YoacoinBot(cfg, connector=connector)
+    async with bot:
+        await bot.start(cfg.discord_token)
+
+
 def main() -> None:
     cfg = Config.load()
     cfg.require_for_bot()
-    bot = YoacoinBot(cfg)
-    bot.run(cfg.discord_token, log_handler=None)
+    try:
+        asyncio.run(_run(cfg))
+    except KeyboardInterrupt:
+        log.info("停止しました")
 
 
 if __name__ == "__main__":
